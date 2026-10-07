@@ -1,0 +1,39 @@
+# By AI
+name: Setup README
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  setup:
+    name: Initialize README
+    if: ${{ !github.event.repository.is_template && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Replace repository placeholder
+        run: |
+          if ! grep -q 'OWNER/REPOSITORY' README.md; then
+            echo "README is already configured."
+            exit 0
+          fi
+
+          sed -i \
+            "s|OWNER/REPOSITORY|${GITHUB_REPOSITORY}|g" \
+            README.md
+
+      - name: Commit README and remove setup workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add README.md
+          git rm .github/workflows/setupReadme.yml
+          git commit -m "chore: initialize README"
+          git push

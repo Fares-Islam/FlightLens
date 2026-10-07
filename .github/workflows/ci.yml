@@ -1,0 +1,416 @@
+# By AI
+name: CI 
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm run test --if-present
+
+      - name: Build
+        run: npm run build
+
+  browser:
+    name: Browser - ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    needs: quality
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Chrome
+            channel: chrome
+          - name: Edge
+            channel: msedge
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browser
+        run: npx playwright install --with-deps ${{ matrix.channel }}
+
+      - name: Build
+        run: npm run build
+
+      - name: Start production server
+        run: |
+          nohup npm run preview -- --host 127.0.0.1 --port 4173 \
+            > /tmp/vite-preview.log 2>&1 &
+          echo $! > /tmp/vite-preview.pid
+
+      - name: Wait for production server
+        run: |
+          for i in {1..30}; do
+            if curl -sf -o /dev/null http://127.0.0.1:4173/; then
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          echo "Production server failed to start."
+          cat /tmp/vite-preview.log
+          exit 1
+
+      - name: Crawl and test website
+        env:
+          BROWSER_CHANNEL: ${{ matrix.channel }}
+          BASE_URL: http://127.0.0.1:4173
+        run: |
+          node --input-type=module <<'EOF'
+          import { chromium } from "@playwright/test";
+
+          const baseUrl = process.env.BASE_URL;
+          const browserChannel = process.env.BROWSER_CHANNEL;
+
+          const MAX_PAGES = 1000;
+          const NAVIGATION_TIMEOUT = 30_000;
+          const RENDER_WAIT = 500;
+
+          const ignoredSchemes = [
+            "mailto:",
+            "tel:",
+            "javascript:",
+            "data:",
+            "blob:",
+          ];
+
+          const isHttpUrl = (url) =>
+            url.protocol === "http:" || url.protocol === "https:";
+
+          const isSameOrigin = (url) => url.origin === new URL(baseUrl).origin;
+
+          const normalizeUrl = (rawUrl) => {
+            const url = new URL(rawUrl, baseUrl);
+
+            url.hash = "";
+
+            // Ignore common tracking parameters so they don't create
+            // duplicate crawl targets.
+            for (const key of [...url.searchParams.keys()]) {
+              if (
+                key.startsWith("utm_") ||
+                [
+                  "fbclid",
+                  "gclid",
+                  "dclid",
+                  "msclkid",
+                  "mc_cid",
+                  "mc_eid",
+                ].includes(key)
+              ) {
+                url.searchParams.delete(key);
+              }
+            }
+
+            return url.href;
+          };
+
+          const isProbablyHtml = (url) => {
+            const pathname = new URL(url).pathname.toLowerCase();
+
+            const nonHtmlExtensions = [
+              ".7z",
+              ".avi",
+              ".bmp",
+              ".csv",
+              ".doc",
+              ".docx",
+              ".gif",
+              ".gz",
+              ".ico",
+              ".jpeg",
+              ".jpg",
+              ".js",
+              ".json",
+              ".mp3",
+              ".mp4",
+              ".mpeg",
+              ".pdf",
+              ".png",
+              ".svg",
+              ".tar",
+              ".txt",
+              ".wav",
+              ".webm",
+              ".webp",
+              ".woff",
+              ".woff2",
+              ".xls",
+              ".xlsx",
+              ".xml",
+              ".zip",
+            ];
+
+            return !nonHtmlExtensions.some((extension) =>
+              pathname.endsWith(extension),
+            );
+          };
+
+          const browser = await chromium.launch({
+            channel: browserChannel,
+            headless: true,
+          });
+
+          const context = await browser.newContext();
+
+          const queue = [normalizeUrl(`${baseUrl}/`)];
+          const queued = new Set(queue);
+          const visited = new Set();
+          const failures = [];
+
+          const addFailure = (message) => {
+            failures.push(message);
+          };
+
+          try {
+            while (queue.length > 0) {
+              if (visited.size >= MAX_PAGES) {
+                addFailure(
+                  `Crawl exceeded the ${MAX_PAGES}-page safety limit.`,
+                );
+                break;
+              }
+
+              const currentUrl = queue.shift();
+
+              if (visited.has(currentUrl)) {
+                continue;
+              }
+
+              visited.add(currentUrl);
+
+              console.log(
+                `[${browserChannel}] ${visited.size}: ${currentUrl}`,
+              );
+
+              const page = await context.newPage();
+
+              const pageErrors = [];
+              const consoleErrors = [];
+              const requestFailures = [];
+              const badResponses = [];
+
+              page.on("console", (message) => {
+                if (message.type() === "error") {
+                  consoleErrors.push(message.text());
+                }
+              });
+
+              page.on("pageerror", (error) => {
+                pageErrors.push(error.message);
+              });
+
+              page.on("requestfailed", (request) => {
+                requestFailures.push(
+                  `${request.method()} ${request.url()} - ${
+                    request.failure()?.errorText ?? "unknown error"
+                  }`,
+                );
+              });
+
+              page.on("response", (response) => {
+                const responseUrl = response.url();
+
+                try {
+                  if (
+                    isSameOrigin(new URL(responseUrl)) &&
+                    response.status() >= 400
+                  ) {
+                    badResponses.push(
+                      `${response.status()} ${response.request().method()} ${responseUrl}`,
+                    );
+                  }
+                } catch {
+                  // Ignore malformed/non-HTTP response URLs.
+                }
+              });
+
+              try {
+                const response = await page.goto(currentUrl, {
+                  waitUntil: "load",
+                  timeout: NAVIGATION_TIMEOUT,
+                });
+
+                if (!response) {
+                  addFailure(`${currentUrl} - navigation returned no response`);
+                } else if (response.status() >= 400) {
+                  addFailure(
+                    `${currentUrl} - page returned HTTP ${response.status()}`,
+                  );
+                }
+
+                await page.waitForTimeout(RENDER_WAIT);
+
+                const links = await page.locator("a[href]").evaluateAll(
+                  (anchors) =>
+                    anchors
+                      .map((anchor) => anchor.href)
+                      .filter(Boolean),
+                );
+
+                for (const href of links) {
+                  let url;
+
+                  try {
+                    url = new URL(href, baseUrl);
+                  } catch {
+                    continue;
+                  }
+
+                  if (
+                    !isHttpUrl(url) ||
+                    ignoredSchemes.some((scheme) =>
+                      href.toLowerCase().startsWith(scheme),
+                    )
+                  ) {
+                    continue;
+                  }
+
+                  if (!isSameOrigin(url)) {
+                    continue;
+                  }
+
+                  const normalized = normalizeUrl(url.href);
+
+                  if (!queued.has(normalized)) {
+                    queued.add(normalized);
+                    queue.push(normalized);
+                  }
+                }
+
+                // Explicitly validate every discovered same-origin link's
+                // HTTP response, including non-HTML files such as PDFs.
+                for (const href of links) {
+                  let url;
+
+                  try {
+                    url = new URL(href, baseUrl);
+                  } catch {
+                    continue;
+                  }
+
+                  if (!isHttpUrl(url) || !isSameOrigin(url)) {
+                    continue;
+                  }
+
+                  const normalized = normalizeUrl(url.href);
+
+                  try {
+                    const responseCheck = await context.request.get(
+                      normalized,
+                      {
+                        timeout: NAVIGATION_TIMEOUT,
+                        failOnStatusCode: false,
+                      },
+                    );
+
+                    if (responseCheck.status() >= 400) {
+                      addFailure(
+                        `Broken internal link: ${normalized} -> HTTP ${responseCheck.status()}`,
+                      );
+                    }
+                  } catch (error) {
+                    addFailure(
+                      `Broken internal link: ${normalized} -> ${
+                        error instanceof Error ? error.message : String(error)
+                      }`,
+                    );
+                  }
+                }
+              } catch (error) {
+                addFailure(
+                  `${currentUrl} - navigation failed: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                );
+              }
+
+              for (const error of consoleErrors) {
+                addFailure(`${currentUrl} - console.error: ${error}`);
+              }
+
+              for (const error of pageErrors) {
+                addFailure(`${currentUrl} - uncaught page error: ${error}`);
+              }
+
+              for (const error of requestFailures) {
+                addFailure(`${currentUrl} - request failed: ${error}`);
+              }
+
+              for (const error of badResponses) {
+                addFailure(`${currentUrl} - bad response: ${error}`);
+              }
+
+              await page.close();
+            }
+
+            console.log(
+              `\n${browserChannel}: crawled ${visited.size} internal page(s).`,
+            );
+
+            if (failures.length > 0) {
+              console.error(
+                `\n${browserChannel}: ${failures.length} failure(s):\n`,
+              );
+
+              for (const failure of failures) {
+                console.error(`- ${failure}`);
+              }
+
+              process.exitCode = 1;
+            } else {
+              console.log(
+                `${browserChannel}: browser compatibility check passed.`,
+              );
+            }
+          } finally {
+            await context.close();
+            await browser.close();
+          }
+          EOF
+
+      - name: Show server log on failure
+        if: failure()
+        run: |
+          echo "===== Vite preview log ====="
+          cat /tmp/vite-preview.log || true
