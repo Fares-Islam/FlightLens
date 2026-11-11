@@ -1,5 +1,5 @@
 {
-  "name": "react-template",
+  "name": "FlightLens",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,7 @@
     "preview": "vp preview"
   },
   "devDependencies": {
+    "@types/chrome": "^0.3.7",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -24,7 +25,14 @@
     }
   },
   "dependencies": {
-    "react": "^19.3.1"
+    "@emailjs/browser": "^5.0.3",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^9.5.0",
+    "@mui/material": "^9.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "valtio": "^2.3.2"
   },
   "engines": {}
 }

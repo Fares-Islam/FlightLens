@@ -1,8 +1,0 @@
-{
-  "rules": {
-    "src/components/**": "PascalCase",
-    "src/!(components)": "camelCase",
-    "src/!(components)/**": "camelCase"
-  },
-  "rename": "auto"
-}

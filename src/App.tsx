@@ -1,21 +1,39 @@
-import { useState } from "react";
-import Index from "./components/Pages/Index";
-import About from "./components/Pages/About";
+import { Box, CssBaseline, GlobalStyles } from "@mui/material";
+import Navbar from "./Components/AppNavbar";
+import About from "./Components/Pages/About";
+import DataHandling from "./Components/Pages/DataHandling";
+import Index from "./Components/Pages/Index";
+
+import { useSnapshot } from "valtio";
+import { vars } from "./hooks/vars";
 
 export default function App() {
-  const [page, setPage] = useState("index");
+  const componentVars = useSnapshot(vars);
 
   return (
-    <div>
-      <nav>
-        <button onClick={() => setPage("index")}>Home</button>
-        <button onClick={() => setPage("about")}>About</button>
-      </nav>
+    <>
+      <CssBaseline />
+      <GlobalStyles
+        styles={{
+          body: {
+            width: "380px",
+            height: "430px",
+          },
+        }}
+      />
+      <Box
+        sx={{
+          minHeight: "100%",
+          backgroundImage: `url(${componentVars.theme ? "darkBg.webp" : "lightBg.webp"})`,
+          backgroundSize: "cover",
+        }}
+      >
+        <Navbar />
 
-      <main>
-        {page === "index" && <Index />}
-        {page === "about" && <About />}
-      </main>
-    </div>
+        {componentVars.page === "Main" && <Index />}
+        {componentVars.page === "Data Handling" && <DataHandling />}
+        {componentVars.page === "About" && <About />}
+      </Box>
+    </>
   );
 }

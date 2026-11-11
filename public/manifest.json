@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "FlightLens",
+  "version": "1.0.0",
+  "permissions": ["storage"],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": "logo.png"
+  },
+  "background": {
+    "service_worker": "chromeApi.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.google.com/travel/flights/*"],
+      "js": ["chromeApi.js"]
+    }
+  ]
+}
